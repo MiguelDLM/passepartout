@@ -92,3 +92,26 @@ export async function getRelationships(tableName: string): Promise<string> {
 
   return formatTable(result.rows);
 }
+
+export async function getCustomFields(tableName: string): Promise<any[]> {
+  const tbl = safeIdent(tableName, 'table name').toLowerCase();
+  const sql = `
+    SELECT
+      sci.Name AS FieldName,
+      MAX(COALESCE(s.Text, '')) AS Label,
+      MAX(COALESCE(sci.Type, '')) AS Type,
+      MAX(COALESCE(sci.IsRequired, 0)) AS IsReq
+    FROM splocalecontaineritem sci
+    JOIN splocalecontainer sc ON sci.SpLocaleContainerID = sc.SpLocaleContainerID
+    LEFT JOIN splocaleitemstr s ON s.SpLocaleContainerItemNameID = sci.SpLocaleContainerItemID AND s.Language = 'en'
+    WHERE sc.Name = ${literal(tbl)}
+      AND (sci.IsHidden = 0 OR sci.IsHidden IS NULL)
+      AND (sci.Name REGEXP '^(text|integer|number|yesno|remarks)[0-9]+$' OR sci.Name REGEXP '^[a-z]+[0-9]+$')
+    GROUP BY sci.Name
+    ORDER BY sci.Name
+  `;
+
+  const result = await query(sql);
+  return result.rows;
+}
+

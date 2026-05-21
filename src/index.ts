@@ -32,10 +32,11 @@ import {
   listRelatedRecords,
   deleteRecord,
   createRecord,
+  upsertRecordAttribute,
 } from './crud.js';
 import { listSpecifyUsers, createSpecifyUser, getSystemHealth, deleteSpecifyUser } from './admin.js';
 import { browseAuthorityTree, getTaxonPath, getDescendantsByRank } from './authority.js';
-import { listAllTables, getTableFieldMetadata, getRelationships } from './schema.js';
+import { listAllTables, getTableFieldMetadata, getRelationships, getCustomFields } from './schema.js';
 import { getAuditLogs, getAuditLogDetails } from './audit.js';
 import { listAttachments, listAttachmentsBatch, renameAttachmentMetadata, linkExistingAttachment } from './assets.js';
 import { searchReferences } from './bibliography.js';
@@ -114,13 +115,16 @@ function createServer() {
 
   const register = (name: string, desc: string, schema: any, fn: Function) => {
     server.tool(name, desc, schema, async (args: any) => {
+      process.stderr.write(`[tool-call] ${name} args: ${JSON.stringify(args)}\n`);
       try {
         const result = await fn(args);
+        process.stderr.write(`[tool-success] ${name}\n`);
         // Compact JSON serialization saves 25-40% tokens vs pretty-printed.
         // MCP clients format the payload themselves; indents are dead weight.
         const text = typeof result === 'string' ? result : JSON.stringify(result);
         return { content: [{ type: 'text' as const, text }] };
       } catch (e: any) {
+        process.stderr.write(`[tool-error] ${name} error: ${e.message}\n`);
         return { content: [{ type: 'text' as const, text: 'Error: ' + e.message }], isError: true };
       }
     });
@@ -177,6 +181,9 @@ function createServer() {
   register('specify_delete_row', 'Delete row via ORM. confirm must equal "delete-<table>-<id>"',
     { table_name: z.string(), record_id: z.number(), confirm: z.string() },
     (a: any) => deleteRecord(a.table_name, a.record_id, a.confirm));
+  register('specify_upsert_attribute', 'Create or update a nested 1-to-1 attribute record (e.g. preparationattribute on preparation) via Specify REST API',
+    { parent_table: z.string(), parent_id: z.number(), attribute_relation_name: z.string(), updates: z.string(), collection_member_id: z.number().optional() },
+    (a: any) => upsertRecordAttribute(a.parent_table, a.parent_id, a.attribute_relation_name, JSON.parse(a.updates), a.collection_member_id));
 
   // ─── Specify: Schema introspection ────────────────────────────────────────
   register('specify_list_tables', 'List tables; pattern is SQL LIKE (e.g. "taxon%")',
@@ -188,6 +195,9 @@ function createServer() {
   register('specify_list_fks', 'List foreign-key relationships from a table',
     { table_name: z.string() },
     (a: any) => getRelationships(a.table_name));
+  register('specify_get_custom_fields', 'Get customized fields (columns like text1, number2, etc. and their English localized labels) for a given table',
+    { table_name: z.string() },
+    (a: any) => getCustomFields(a.table_name));
 
   // ─── Specify: Authority trees ─────────────────────────────────────────────
   register('specify_browse_tree', 'Browse tree table: taxon/geography/storage/geologictimeperiod/lithostrat',
@@ -561,6 +571,7 @@ async function main() {
         if (!sessionId && isInitializeRequest(req.body)) {
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
+            enableJsonResponse: true, // Enable JSON response mode for Cloudflare compatibility
             onsessioninitialized: (sid: string) => {
               transports[sid] = transport;
               touch(sid);
@@ -602,24 +613,20 @@ async function main() {
 
     // ─── GET /mcp (SSE stream for server-initiated messages) ───────────
     app.get('/mcp', auth, async (req, res) => {
-      const sessionId = req.headers['mcp-session-id'] as string | undefined;
-      if (!sessionId || !transports[sessionId]) {
-        res.status(400).json({ error: 'Invalid or missing session ID' });
-        return;
-      }
-      touch(sessionId);
-      await transports[sessionId].handleRequest(req, res);
+      // Return 405 Method Not Allowed in JSON response mode
+      res.status(405).set('Allow', 'POST').send('Method Not Allowed');
     });
 
     // ─── DELETE /mcp (session termination) ─────────────────────────────
     app.delete('/mcp', auth, async (req, res) => {
+      // Forward to transport (will handle session termination)
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
-      if (!sessionId || !transports[sessionId]) {
+      if (sessionId && transports[sessionId]) {
+        touch(sessionId);
+        await transports[sessionId].handleRequest(req, res);
+      } else {
         res.status(400).json({ error: 'Invalid or missing session ID' });
-        return;
       }
-      touch(sessionId);
-      await transports[sessionId].handleRequest(req, res);
     });
 
     // Health endpoint (useful for k8s readiness probes)

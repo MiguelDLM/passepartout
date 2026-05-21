@@ -7,6 +7,7 @@ import { formatTable } from './utils.js';
 import { safeIdent, safeInt, safeIntList } from './sql-safety.js';
 import { runPythonInWebContainer } from './executor.js';
 import { apiGet, apiPut, apiPost } from './specify-api.js';
+import { config } from './config.js';
 
 /**
  * Get the Primary Key column name for a table.
@@ -441,4 +442,81 @@ except Exception as e:
     `Note: Specify's spauditlog middleware only fires for HTTP API requests, not direct ORM deletes — ` +
     `the row is gone but no audit-log entry was created. Recover from MariaDB binlog or backup if needed.`
   );
+}
+
+export async function upsertRecordAttribute(
+  parentTableName: string,
+  parentId: number,
+  attributeRelationName: string,
+  updates: Record<string, any>,
+  collectionMemberId?: number
+): Promise<any> {
+  const tbl = safeIdent(parentTableName, 'parent table name');
+  const recId = safeInt(parentId);
+  const relName = safeIdent(attributeRelationName, 'relation name');
+
+  // 1. Fetch parent record from the API
+  let parentRecord: any;
+  try {
+    parentRecord = await apiGet(`/api/specify/${tbl}/${recId}/`);
+  } catch (err: any) {
+    if (err.message.includes('404')) {
+      throw new Error(`Parent record with ID=${recId} not found in table ${tbl}.`);
+    }
+    throw new Error(`Failed to fetch parent record from API: ${err.message}`);
+  }
+
+  // Determine collectionmemberid to use
+  let resolvedCollMemberId = collectionMemberId;
+  if (!resolvedCollMemberId) {
+    if (parentRecord.collectionmemberid !== undefined && parentRecord.collectionmemberid !== null) {
+      resolvedCollMemberId = typeof parentRecord.collectionmemberid === 'number'
+        ? parentRecord.collectionmemberid
+        : parseInt(String(parentRecord.collectionmemberid).split('/').filter(Boolean).pop() ?? '0');
+    } else if (parentRecord.collectionmember !== undefined && parentRecord.collectionmember !== null) {
+      resolvedCollMemberId = typeof parentRecord.collectionmember === 'number'
+        ? parentRecord.collectionmember
+        : parseInt(String(parentRecord.collectionmember).split('/').filter(Boolean).pop() ?? '0');
+    } else if (parentRecord.collection !== undefined && parentRecord.collection !== null) {
+      resolvedCollMemberId = typeof parentRecord.collection === 'number'
+        ? parentRecord.collection
+        : parseInt(String(parentRecord.collection).split('/').filter(Boolean).pop() ?? '0');
+    }
+  }
+
+  // Fallback to active session collectionId if still not resolved or invalid
+  if (!resolvedCollMemberId || isNaN(resolvedCollMemberId)) {
+    resolvedCollMemberId = config.specify.collectionId;
+  }
+
+  // 2. Prepare the nested attribute object
+  let attrObj = parentRecord[relName];
+  if (!attrObj) {
+    // If the attribute relation does not exist, create it new
+    attrObj = {
+      collectionmemberid: resolvedCollMemberId,
+      ...updates
+    };
+  } else {
+    // If it exists, merge the updates, retaining its id and version
+    attrObj = {
+      ...attrObj,
+      collectionmemberid: resolvedCollMemberId,
+      ...updates
+    };
+  }
+
+  // 3. Prepare the PUT payload.
+  const payload = {
+    ...parentRecord,
+    [relName]: attrObj
+  };
+
+  // 4. Send PUT request
+  try {
+    const updated = await apiPut(`/api/specify/${tbl}/${recId}/`, payload);
+    return updated;
+  } catch (err: any) {
+    throw new Error(`Failed to upsert nested attribute ${relName} on ${tbl}#${recId}: ${err.message}`);
+  }
 }
