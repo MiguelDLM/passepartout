@@ -36,7 +36,8 @@ import {
 } from './crud.js';
 import { listSpecifyUsers, createSpecifyUser, getSystemHealth, deleteSpecifyUser } from './admin.js';
 import { browseAuthorityTree, getTaxonPath, getDescendantsByRank } from './authority.js';
-import { listAllTables, getTableFieldMetadata, getRelationships, getCustomFields } from './schema.js';
+import { listAllTables, getTableFieldMetadata, getRelationships, getCustomFields, findFields } from './schema.js';
+import { executeSql } from './db.js';
 import { getAuditLogs, getAuditLogDetails } from './audit.js';
 import { listAttachments, listAttachmentsBatch, renameAttachmentMetadata, linkExistingAttachment } from './assets.js';
 import { searchReferences } from './bibliography.js';
@@ -282,8 +283,23 @@ function createServer() {
     { query_id: z.number() },
     (a: any) => getQueryFields(a.query_id));
   register('specify_run_query', 'Execute a saved query and return results',
-    { query_id: z.number() },
-    (a: any) => runSavedQuery(a.query_id));
+    { query_id: z.number(), limit: z.number().int().optional() },
+    (a: any) => runSavedQuery(a.query_id, a.limit ?? 50));
+
+  // ─── Specify: Schema exploration & direct SQL ─────────────────────────────
+  register('specify_find_fields',
+    'Search for fields and their localized labels across all Specify tables. ' +
+    'Useful for discovering which column stores a concept (e.g. "format", "sex", "remarks"). ' +
+    'Returns TableName, FieldName, Label, Type, FieldCategory (Standard or Custom).',
+    { search_term: z.string(), table_name: z.string().optional() },
+    (a: any) => findFields(a.search_term, a.table_name));
+
+  register('specify_execute_sql',
+    'Execute a strictly read-only SQL query (SELECT / SHOW / DESCRIBE / EXPLAIN) ' +
+    'directly on the Specify database. Useful for ad-hoc data exploration. ' +
+    'Write operations (UPDATE, INSERT, DELETE, DROP, etc.) are blocked by validation.',
+    { sql: z.string() },
+    (a: any) => executeSql(a.sql));
 
   // ─── Specify: ViewSets ────────────────────────────────────────────────────
   register('specify_list_viewsets', 'List UI ViewSets', {}, () => listViewSets());

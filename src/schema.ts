@@ -115,3 +115,43 @@ export async function getCustomFields(tableName: string): Promise<any[]> {
   return result.rows;
 }
 
+/**
+ * Search standard and custom fields (and their English labels) from
+ * splocalecontaineritem + splocalecontainer + splocaleitemstr matching a search term.
+ */
+export async function findFields(searchTerm: string, tableName?: string): Promise<string> {
+  const searchPattern = `%${searchTerm}%`;
+  let tableFilter = '';
+  if (tableName) {
+    const safeTable = safeIdent(tableName, 'table name').toLowerCase();
+    tableFilter = `AND sc.Name = ${literal(safeTable)}`;
+  }
+
+  const sql = `
+    SELECT
+      sc.Name AS TableName,
+      sci.Name AS FieldName,
+      MAX(COALESCE(s.Text, '')) AS Label,
+      MAX(COALESCE(sci.Type, '')) AS Type,
+      MAX(CASE
+        WHEN sci.Name REGEXP '^(text|integer|number|yesno|remarks)[0-9]+$' OR sci.Name REGEXP '^[a-z]+[0-9]+$' THEN 'Custom'
+        ELSE 'Standard'
+      END) AS FieldCategory
+    FROM splocalecontaineritem sci
+    JOIN splocalecontainer sc ON sci.SpLocaleContainerID = sc.SpLocaleContainerID
+    LEFT JOIN splocaleitemstr s ON s.SpLocaleContainerItemNameID = sci.SpLocaleContainerItemID AND s.Language = 'en'
+    WHERE (sci.IsHidden = 0 OR sci.IsHidden IS NULL)
+      ${tableFilter}
+      AND (sci.Name LIKE ${literal(searchPattern)} OR s.Text LIKE ${literal(searchPattern)})
+    GROUP BY sc.Name, sci.Name
+    ORDER BY sc.Name, FieldCategory DESC, sci.Name
+    LIMIT 200
+  `;
+
+  const result = await query(sql);
+  if (result.rows.length === 0) {
+    return `No fields found matching "${searchTerm}"${tableName ? ` in table "${tableName}"` : ''}.`;
+  }
+
+  return formatTable(result.rows);
+}

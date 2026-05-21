@@ -306,13 +306,40 @@ export function formatQueryForDisplay(q: QueryInfo, fields: QueryFieldInfo[]): s
 }
 
 export async function runSavedQuery(queryId: number, limit: number = 50): Promise<string> {
-  // Specify 7 API endpoint for running a query
-  const path = `/api/specify/query/${queryId}/results/?limit=${limit}`;
+  // Fetch display fields and their column labels from spqueryfield (ordered by Position).
+  const fieldResult = await query(
+    `SELECT Position, FieldName, ColumnAlias, IsDisplay, StringId
+     FROM spqueryfield
+     WHERE SpQueryID = ${queryId} AND IsDisplay = 1
+     ORDER BY Position`
+  );
+
+  if (fieldResult.rows.length === 0) {
+    return `Query #${queryId} not found or has no display fields.`;
+  }
+
+  // Build column name array: prefer ColumnAlias → FieldName.
+  const columns = fieldResult.rows.map(r => r.ColumnAlias || r.FieldName || '?');
+
+  // Execute the saved query via Specify 7 REST API.
+  // The endpoint returns { results: [[val, val, ...], ...] } where each inner
+  // array has values positionally aligned to the IsDisplay=1 fields.
+  const path = `/stored_query/query/${queryId}/?limit=${limit}`;
   const data = await apiGet(path) as any;
-  
-  if (!data || !data.results || data.results.length === 0) {
+
+  if (!data || !Array.isArray(data.results) || data.results.length === 0) {
     return 'No results found for this query.';
   }
-  
-  return formatTable(data.results);
+
+  // Map positional arrays to named-column records and render as a TSV table.
+  const rows: Record<string, string | null>[] = data.results.map((row: any[]) => {
+    const record: Record<string, string | null> = {};
+    columns.forEach((col, i) => {
+      const val = row[i];
+      record[col] = val === null || val === undefined ? null : String(val);
+    });
+    return record;
+  });
+
+  return formatTable(rows);
 }

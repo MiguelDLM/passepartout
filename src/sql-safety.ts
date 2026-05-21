@@ -40,3 +40,50 @@ export function safeIntList(values: unknown, role = 'id list', maxLen = 500): st
   if (values.length > maxLen) throw new Error(`${role} exceeds maximum length of ${maxLen}.`);
   return values.map(v => safeInt(v, role)).join(',');
 }
+
+/**
+ * Validate that a SQL statement is strictly read-only.
+ * Only allows SELECT, SHOW, DESCRIBE, and EXPLAIN, and blocks write/mutation keywords.
+ */
+export function validateReadOnlySql(sql: string): void {
+  if (typeof sql !== 'string') {
+    throw new Error('SQL query must be a string.');
+  }
+
+  // Remove multi-line comments: /* ... */
+  // Remove single-line comments: -- ... or # ...
+  const cleaned = sql
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(--|#)[^\r\n]*/g, ' ')
+    .trim();
+
+  if (!cleaned) {
+    throw new Error('SQL query is empty.');
+  }
+
+  // Must start with SELECT, SHOW, DESCRIBE, or EXPLAIN (allowing optional leading spaces/parentheses)
+  const firstWordMatch = cleaned.match(/^\s*\(?\s*([A-Za-z]+)/);
+  if (!firstWordMatch) {
+    throw new Error('Could not identify the SQL command/keyword.');
+  }
+
+  const firstKeyword = firstWordMatch[1].toUpperCase();
+  const allowedFirstKeywords = ['SELECT', 'SHOW', 'DESCRIBE', 'EXPLAIN'];
+  if (!allowedFirstKeywords.includes(firstKeyword)) {
+    throw new Error(`Forbidden SQL command: "${firstKeyword}". Only SELECT, SHOW, DESCRIBE, and EXPLAIN queries are allowed.`);
+  }
+
+  const forbiddenKeywords = [
+    'INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE',
+    'REPLACE', 'RENAME', 'GRANT', 'REVOKE', 'MERGE', 'CALL', 'LOAD', 'INTO',
+    'OUTFILE', 'DUMPFILE'
+  ];
+
+  for (const keyword of forbiddenKeywords) {
+    const regex = new RegExp(`\\b${keyword}\\b`, 'i');
+    if (regex.test(cleaned)) {
+      throw new Error(`Forbidden SQL keyword detected: "${keyword}". Direct SQL queries must be strictly read-only.`);
+    }
+  }
+}
+

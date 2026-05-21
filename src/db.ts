@@ -5,6 +5,9 @@
 import { config } from './config.js';
 import { runCommandInContainer, runPythonInWebContainer } from './executor.js';
 import mysql from 'mysql2/promise';
+import { validateReadOnlySql } from './sql-safety.js';
+import { formatTable } from './utils.js';
+
 
 export interface QueryResult {
   rows: Record<string, string | null>[];
@@ -150,3 +153,14 @@ print("updated:", cursor.rowcount)
 export function literal(value: string): string {
   return `'${escapeString(value)}'`;
 }
+
+/**
+ * Validates that the query is read-only and executes it.
+ * Returns the result formatted as a TSV table.
+ */
+export async function executeSql(sql: string): Promise<string> {
+  validateReadOnlySql(sql);
+  const result = await query(sql);
+  return formatTable(result.rows);
+}
+
