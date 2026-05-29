@@ -103,6 +103,13 @@ import {
 } from './specify-extras.js';
 import { exportDwcArchive } from './dwca-export.js';
 import { executeSpecifyApi } from './specify-api.js';
+import {
+  specifyPortalCollections,
+  specifyPortalFields,
+  specifyPortalSearch,
+  specifyPortalGetRecord,
+  specifyPortalValidateRecord
+} from './external-specify-portal.js';
 
 function createServer() {
   const server = new McpServer({
@@ -494,6 +501,23 @@ function createServer() {
     (a: any) => uploadAttachmentToSpecify(a));
   register('zotero_cleanup_cache', 'Delete temporary Zotero files in /tmp',
     {}, () => cleanupZoteroCache());
+
+  // ─── Specify Portals (External) ───────────────────────────────────────────
+  register('specify_portal_collections', 'List all collections (slugs and names) exposed on an external Specify portal',
+    { portal_url: z.string() },
+    (a: any) => specifyPortalCollections(a.portal_url));
+  register('specify_portal_fields', 'List searchable fields and metadata for a specific collection on an external Specify portal',
+    { portal_url: z.string(), collection: z.string() },
+    (a: any) => specifyPortalFields(a.portal_url, a.collection));
+  register('specify_portal_search', 'Search specimen records in a specific collection on an external Specify portal',
+    { portal_url: z.string(), collection: z.string(), query_json: z.string().optional(), q: z.string().optional(), page: z.number().optional() },
+    (a: any) => specifyPortalSearch(a.portal_url, a.collection, a.query_json ? JSON.parse(a.query_json) : undefined, a.q, a.page));
+  register('specify_portal_get_record', 'Retrieve a specific specimen record by its catalog number from an external Specify portal',
+    { portal_url: z.string(), collection: z.string(), catalog_number: z.number() },
+    (a: any) => specifyPortalGetRecord(a.portal_url, a.collection, a.catalog_number));
+  register('specify_portal_validate_record', 'Compare a local record against its counterpart on an external Specify portal',
+    { portal_url: z.string(), collection: z.string(), catalog_number: z.number() },
+    (a: any) => specifyPortalValidateRecord(a.portal_url, a.collection, a.catalog_number));
 
   return server;
 }
